@@ -88,19 +88,3 @@ Integration tests in `internal/ratelimiter` and `internal/middleware` run
 against a real Redis instance (`docker compose up -d` first) — including
 tests that point at an unreachable Redis to verify fail-open/fail-closed
 behavior.
-
-## Resume summary
-
-> **Distributed Rate Limiter — Go, Redis, Lua** — Designed and implemented
-> a distributed sliding-window rate limiter enforcing per-client request
-> limits atomically across multiple API instances via Redis Lua scripting
-> (EVALSHA), eliminating race conditions without distributed locks.
-> Packaged as reusable `net/http` middleware with pluggable key strategies
-> (IP / API key / user ID) and configurable fail-open/fail-closed
-> resilience for Redis outages. Verified correctness under concurrent load
-> with a Go goroutine/channel-based load-testing client.
-
-**Keywords:** Go, Redis, Lua scripting, distributed systems, atomicity,
-race conditions, `net/http` middleware, goroutines, channels,
-`sync.WaitGroup`, resilience design, fail-open/fail-closed, sliding window
-rate limiting, EVAL/EVALSHA, Docker.
