@@ -1,4 +1,4 @@
-# gateway — Distributed Rate Limiter in Go + Redis
+# Distributed Rate Limiter in Go + Redis
 
 A distributed, sliding-window rate limiter enforced atomically across
 multiple API instances via Redis and Lua scripting, exposed as standard
