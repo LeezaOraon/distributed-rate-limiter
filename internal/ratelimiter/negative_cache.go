@@ -38,7 +38,16 @@ type NegativeCache struct {
 	// the read lock, only a denial takes the write lock — so RWMutex rather
 	// than Mutex.
 	mu      sync.RWMutex
-	blocked map[string]time.Time // key -> when the local block expires
+	blocked map[string]denial // key -> the remembered denial
+}
+
+// denial is a remembered refusal: when the local block ends, plus the
+// absolute times needed to report an accurate Retry-After and reset on a hit.
+type denial struct {
+	until   time.Time
+	retryAt time.Time
+	resetAt time.Time
+	limit   int64
 }
 
 // NewNegativeCache wraps inner so that a denied key is denied locally for
@@ -49,33 +58,51 @@ func NewNegativeCache(inner Allower, blockFor time.Duration, maxEntries int) *Ne
 		inner:      inner,
 		blockFor:   blockFor,
 		maxEntries: maxEntries,
-		blocked:    make(map[string]time.Time),
+		blocked:    make(map[string]denial),
 	}
 }
 
 func (c *NegativeCache) Allow(ctx context.Context, key string) (bool, error) {
+	res, err := c.Check(ctx, key)
+	return res.Allowed, err
+}
+
+// Check is Allow plus the decision details. A cache hit reports the retry and
+// reset times remembered from the original denial, shrunk by the time elapsed.
+func (c *NegativeCache) Check(ctx context.Context, key string) (Result, error) {
 	now := time.Now()
 
 	c.mu.RLock()
-	until, found := c.blocked[key]
+	d, found := c.blocked[key]
 	c.mu.RUnlock()
 
-	if found && now.Before(until) {
-		return false, nil
+	if found && now.Before(d.until) {
+		return Result{
+			Limit:      d.limit,
+			ResetAfter: positive(d.resetAt.Sub(now)),
+			RetryAfter: positive(d.retryAt.Sub(now)),
+		}, nil
 	}
 
-	allowed, err := c.inner.Allow(ctx, key)
-	if err != nil || allowed {
+	res, err := checkAllower(ctx, c.inner, key)
+	if err != nil || res.Allowed {
 		// Errors are never cached: whether to allow or deny on an unreachable
 		// limiter is the caller's FailPolicy decision, made per request.
-		return allowed, err
+		return res, err
 	}
 
-	c.block(key, now)
-	return false, nil
+	c.block(key, now, res)
+	return res, nil
 }
 
-func (c *NegativeCache) block(key string, now time.Time) {
+func positive(d time.Duration) time.Duration {
+	if d < 0 {
+		return 0
+	}
+	return d
+}
+
+func (c *NegativeCache) block(key string, now time.Time, res Result) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -88,14 +115,19 @@ func (c *NegativeCache) block(key string, now time.Time) {
 		}
 	}
 
-	c.blocked[key] = now.Add(c.blockFor)
+	c.blocked[key] = denial{
+		until:   now.Add(c.blockFor),
+		retryAt: now.Add(res.RetryAfter),
+		resetAt: now.Add(res.ResetAfter),
+		limit:   res.Limit,
+	}
 }
 
 // evictExpiredLocked drops entries whose block has elapsed. Callers must hold
 // the write lock. Deleting during range is safe in Go.
 func (c *NegativeCache) evictExpiredLocked(now time.Time) {
-	for k, until := range c.blocked {
-		if !now.Before(until) {
+	for k, d := range c.blocked {
+		if !now.Before(d.until) {
 			delete(c.blocked, k)
 		}
 	}
