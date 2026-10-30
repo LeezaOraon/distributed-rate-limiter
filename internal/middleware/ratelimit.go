@@ -45,7 +45,10 @@ const (
 // RateLimit returns middleware that enforces limiter's sliding-window
 // limit per key, as produced by keyFunc. policy controls what happens to
 // a request when limiter itself cannot be reached.
-func RateLimit(limiter *ratelimiter.Limiter, keyFunc KeyFunc, policy FailPolicy) func(http.Handler) http.Handler {
+//
+// limiter is an interface so a *ratelimiter.Limiter can be wrapped —
+// e.g. in a *ratelimiter.NegativeCache — without this package caring.
+func RateLimit(limiter ratelimiter.Allower, keyFunc KeyFunc, policy FailPolicy) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			key := keyFunc(r)

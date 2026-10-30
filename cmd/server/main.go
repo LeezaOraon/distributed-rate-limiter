@@ -44,6 +44,8 @@ func main() {
 	limit := flag.Int64("limit", envInt64("RATE_LIMIT", 5), "max requests allowed per window, per client")
 	window := flag.Duration("window", envDuration("RATE_WINDOW", 10*time.Second), "sliding window size")
 	failPolicyFlag := flag.String("fail-policy", envString("FAIL_POLICY", "open"), `what to do when Redis is unreachable: "open" or "closed"`)
+	denyCache := flag.Duration("deny-cache", envDuration("DENY_CACHE", 500*time.Millisecond), "remember a denied key locally for this long, skipping Redis (0 disables)")
+	denyCacheSize := flag.Int64("deny-cache-size", envInt64("DENY_CACHE_SIZE", 100_000), "max keys held in the local denial cache")
 	flag.Parse()
 
 	var failPolicy middleware.FailPolicy
@@ -63,7 +65,14 @@ func main() {
 		WriteTimeout: 200 * time.Millisecond,
 	})
 
-	limiter := ratelimiter.New(rdb, *limit, *window)
+	var limiter ratelimiter.Allower = ratelimiter.New(rdb, *limit, *window)
+	if *denyCache > 0 {
+		// A client already over its limit otherwise costs a Redis round trip
+		// per request — the limiter works hardest exactly when it is under
+		// attack. Caching only denials can make us stricter, never more
+		// permissive, so it cannot let a client exceed its limit.
+		limiter = ratelimiter.NewNegativeCache(limiter, *denyCache, int(*denyCacheSize))
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +81,7 @@ func main() {
 
 	handler := middleware.RateLimit(limiter, middleware.ByIP, failPolicy)(mux)
 
-	log.Printf("listening on %s (limit: %d requests / %s per client IP, fail-policy=%s, redis=%s)",
-		*listenAddr, *limit, *window, *failPolicyFlag, *redisAddr)
+	log.Printf("listening on %s (limit: %d requests / %s per client IP, fail-policy=%s, redis=%s, deny-cache=%s)",
+		*listenAddr, *limit, *window, *failPolicyFlag, *redisAddr, *denyCache)
 	log.Fatal(http.ListenAndServe(*listenAddr, handler))
 }
